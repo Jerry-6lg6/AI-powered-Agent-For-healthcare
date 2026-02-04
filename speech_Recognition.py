@@ -12,6 +12,7 @@ import time
 import pygame
 import os
 from faster_whisper import WhisperModel
+
 class beeper:
     def __init__(self, sample_rate=44100, buffer_size=1024, cache_dir=r"audio\beep"):
         self.filename = "beep.wav"
@@ -72,8 +73,6 @@ class beeper:
         sound.play()
         return 0
 
-
-
 class speechRecognizer:
     def __init__(self, model_name="whisper", model_size="medium", device="cuda"):
         self.model_name = model_name
@@ -118,6 +117,19 @@ class speechRecognizer:
 
         return text, time_0, time_1
 
+class RobustSpeechRecognizer(speechRecognizer):
+    def __init__(self, *args, plugins=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.plugins = plugins or []
+
+    def apply_plugins(self, audio, sr):
+        for plugin in self.plugins:
+            audio = plugin.process(audio, sr)
+        return audio
+
+    def record_audio(self, duration=10, samplerate=16000):
+        text, t0, t1 = super().record_audio(duration, samplerate)
+        return text, t0, t1
 
 
 if __name__ == "__main__":
