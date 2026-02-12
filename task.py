@@ -8,7 +8,17 @@ from classifier import Classifier
 
 PLAY_SPEED = 1
 
+from enum import Enum, auto
 
+class QState(Enum):
+    INIT = auto()
+    ASKING = auto()
+    LISTENING = auto()
+    INTERRUPTED = auto()
+    EVALUATING = auto()
+    CORRECT = auto()
+    INCORRECT = auto()
+    EXIT = auto()
 class Item(ABC):
     def __init__(self, id=0, name=None):
         self.list = []
@@ -70,7 +80,7 @@ class Task(Item):
     def _handle_state(self, state, syth):
         if state.get("stop") == 1:
             if self.rest_count < 3:
-                self.rest(syth, 5)
+                self.rest(syth, 1)
                 self.rest_count += 1
                 return "retry"
             else:
@@ -78,11 +88,12 @@ class Task(Item):
                 return "exit"
 
         if state.get("emergency") == 1:
-            self.finish_tesk(syth)
+            self.finish_task(syth)
             return "exit"
 
         if state.get("dont_know") == 1:
-            return "skip"
+            self.encourage(syth)
+            return "retry"
 
         return "ok"
 
@@ -136,9 +147,9 @@ class Task(Item):
                 if status == "exit":
                     return 0
                 if status == "skip":
-                    break
+                    continue
                 if bd_result == 1:
-                    break
+                    continue
 
         return 0
 
@@ -170,6 +181,20 @@ class Task(Item):
                         filename=fr"break.wav",
                         is_synthesize=True)
         return 0
+
+    def encourage(self, syth: speechSynthesize):
+
+        if self.retry_count < 2:
+            text = "Jsut try the answer that you are thinking."
+            syth.play_audio(text=text,
+                            filename=fr"encourage.wav",
+                            is_synthesize=True)
+        else:
+            text = "What about the next one."
+            syth.play_audio(text=text,
+                            filename=fr"next.wav",
+                            is_synthesize=True)
+            return 0
 
     def rest(self, syth: speechSynthesize, t: int):
         if self.rest_count < 3:
@@ -252,7 +277,7 @@ class Question(Item):
             syth.play_audio(text=self.correct_response,
                             filename=f"{self.name}_{self.id}_correct_response.wav",
                             playback_speed=1,
-                            is_synthesize=self.is_synthesize)
+                            is_synthesize=True)
             return state, result
         elif result == 0:
             if len(self.list) > 0:
@@ -263,12 +288,12 @@ class Question(Item):
                         syth.play_audio(text=self.incorrect_response,
                                         filename=f"{self.name}_{self.id}_incorrect_response.wav",
                                         playback_speed=1,
-                                        is_synthesize=self.is_synthesize)
+                                        is_synthesize=True)
 
                         return state, result
 
             syth.play_audio(text=self.correct_response, filename=f"{self.name}_{self.id}_correct_response.wav",
-                            playback_speed=1)
+                            playback_speed=1, is_synthesize=True)
             state["correct"] = 1
             result = 1
 
@@ -285,7 +310,7 @@ def ordinal(n: int) -> str:
 if __name__ == "__main__":
     # Initial question and task
 
-    instruction = " my name is Emily. This task is a orientation task, try to answer the question after hearing the beep and avoid any guessing."
+    instruction = " my name is Jerry. This task is a orientation task, try to answer the question after hearing the beep and avoid any guessing."
 
     t_0 = "What specific date of today? "
     t_00 = "what year is it this year? "
