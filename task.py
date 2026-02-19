@@ -13,6 +13,9 @@ PLAY_SPEED = 1
 WAIT_TIME = 1
 SPEED = 1
 SPEED_SLOW = 0.85
+REST_TIME = 3
+CHANGEABLE = True
+UNCHANGEABLE = True
 
 from enum import Enum, auto
 
@@ -20,7 +23,7 @@ from enum import Enum, auto
 class TaskState(Enum):
     INIT = auto()
     READY_CHECK = auto()
-    WAITING_FOR_KEYWORD = auto()  # New state
+    WAITING_FOR_KEYWORD = auto()
     INTERACT_MAIN = auto()
     INTERACT_BREAKDOWN = auto()
     NEXT = auto()
@@ -87,7 +90,7 @@ class Task(Item):
         self.speed = 1
         self.rest_count = 0
         self.retry_count = 0
-        self.speed=SPEED
+        self.speed = SPEED
 
     # Handle the special state in one function
     def _handle_state(self, state, syth):
@@ -106,10 +109,15 @@ class Task(Item):
 
         elif state.get("dont_know") == 1:
             self.speed = SPEED_SLOW
+            print(f"NEW SPEED : {self.speed}")
             self.encourage(syth)
             return "retry"
         elif state.get("correct") == 0:
-            syth.play_audio()
+            text = "Let's have another try."
+            syth.play_audio(text=text,
+                            filename=f"bridge.wav",
+                            playback_speed=self.speed,
+                            is_synthesize=True)
             return "retry"
         return "continue"
 
@@ -184,8 +192,8 @@ class Task(Item):
 
             # Waiting for Keyword State
             elif state == TaskState.WAITING_FOR_KEYWORD:
-                t = WAIT_TIME * 60
-                keyword_result = self.wait_for_keyword(rcg, keyword="Emily", timeout=t*60)
+                t = WAIT_TIME
+                keyword_result = self.wait_for_keyword(rcg, keyword="Jennet", timeout=t * 60)
 
                 if keyword_result == "detected":
                     confirm_text = "I heard you! Let's start now."
@@ -278,6 +286,7 @@ class Task(Item):
                 else:
                     state = TaskState.INTERACT_MAIN
 
+        # The end of the task =>  logging and
         if state == TaskState.FINISH:
             self.finish_task(syth)
         elif state == TaskState.EXIT:
@@ -319,7 +328,7 @@ class Task(Item):
     def encourage(self, syth: speechSynthesize):
 
         if self.retry_count < 1:
-            text = "Come on, Let's have another try"
+            text = "Don't worry, I would slow down a little bit, Let's have another try"
             syth.play_audio(text=text,
                             filename=fr"encourage.wav",
                             is_synthesize=True,
@@ -369,8 +378,8 @@ class Task(Item):
         if state.get("emergency") == 1:
             return "exit"
 
-        if state.get("stop") == 1:
-            return "exit"
+        # if state.get("stop") == 1:
+        #     return "exit"
 
         # Patient is ready
         if state.get("correct") == 1:
@@ -402,11 +411,12 @@ class Task(Item):
         # print(f"Waiting for keyword '{keyword}'... (timeout: {timeout}s)")
 
         start_time = time.time()
-        check_interval = 2 # Check every 0.5 seconds
+        check_interval = 2  # Check every 0.5 seconds
+        print(f" Sleep for {timeout}s...")
         time.sleep(timeout)
         # while (time.time() - start_time) < timeout:
 
-            # Use keyword detection with short timeout
+        # Use keyword detection with short timeout
         #     detected = rcg.listen_keyword(
         #         keywords=[keyword.lower()],
         #         timeout=check_interval
@@ -445,6 +455,7 @@ class Question(Item):
         self.is_synthesize = is_synthesize
         self.state_list = []
         self.end_text = end_text
+        self.speaking_time = 0
 
     def calculate(self):
         if len(self.list) == 0:
@@ -480,12 +491,15 @@ class Question(Item):
         text, time_0, time_1 = rcg.record_audio()
 
         self.thinking_time = time_0
+        self.speaking_time = time_1 - time_0
         state, score = clf.state_match(input_text=text, target_text=self.answer)
-        self.state = state
         result = state["correct"]
         print(f"the result is {result}, input_text is P{text}, target test is {self.answer}")
 
         # If detect the correct answer -> correct response
+        if score == 2:
+            print("Special state detected...")
+            return state, result
         if result == 1:
             self.score = 1
             syth.play_audio(text=self.correct_response,
@@ -569,9 +583,10 @@ if __name__ == "__main__":
 
     now = time.localtime()
     formatted_time = time.strftime("It is %I:%M %p on %A, %B %d, %Y.", now)
-    instruction = f" my name is Jennet. {formatted_time}. There is an orientation task in your planner, try to answer the question after hearing the beep and avoid any guessing."
+    instruction = f"{formatted_time}. There is an orientation task in your planner, try to answer the question after hearing the beep and avoid any guessing."
 
-    print(f"{type(year)}...{year}...{type(month)}...{month}...{type(day_ordinal)}...{day_ordinal}...{type(weekday)}...{weekday}")
+    print(
+        f"{type(year)}...{year}...{type(month)}...{month}...{type(day_ordinal)}...{day_ordinal}...{type(weekday)}...{weekday}")
     end_text = f"Today is {a_0}. If you need to check what the date is, it is written on your Orientation Chart or you can ask any member of staff."
 
     p_0 = Patient(id=0, name="Jerry", address="Lennon studio")
