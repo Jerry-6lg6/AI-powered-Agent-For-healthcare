@@ -97,7 +97,6 @@ class Classifier:
                  device: str = None):
 
         if embedding_model == "bge-large-en-v1.5":
-
             self.tokenizer = AutoTokenizer.from_pretrained(embedding_model)
             self.model = AutoModel.from_pretrained(embedding_model)
 
@@ -265,6 +264,8 @@ class Classifier:
             "dont_know": 0,
             "stop": 0,
             "emergency": 0,
+            "free_talk": 0,
+            "silence": 0
         }
         score = 0
         target_text = target_text.lower()
@@ -283,12 +284,19 @@ class Classifier:
             is_stop = self.match(seg, STOP_VOCAB, 0.90)[0] == 0
             is_emer = self.match(seg, EMERGENCY_VOCAB, 0.80)[0] == 0
 
+            special_case_detected = False
             if is_dk:
                 state["dont_know"] = 1
+                special_case_detected = True
             if is_stop:
                 state["stop"] = 1
+                special_case_detected = True
             if is_emer:
                 state["emergency"] = 1
+                special_case_detected = True
+
+            if special_case_detected:
+                return state, 2
 
             special_case = is_dk or is_stop or is_emer
 
@@ -300,7 +308,7 @@ class Classifier:
                 # print("Hit")
                 score += 1
 
-            # 5. f there are transitional words and the current paragraph is not one of the three special cases → before invalidation, make a judgment
+            # 5. If there are transitional words and the current paragraph is not one of the three special cases → before invalidation, make a judgment
             if has_turn and (not special_case):
                 score = 0
             # print(f"the seg is {seg}, the score is {score}")
@@ -308,6 +316,15 @@ class Classifier:
         # 6. Final detection
         if score == 0:
             state["correct"] = 0  # incorrect
+            if not clean_text or len(clean_text.strip()) < 3:
+                # Check if there are any valid voice clips
+                valid_segments = [seg for seg in segments if seg and len(seg.strip()) >= 2]
+                if len(valid_segments) == 0:
+                    state["silence"] = 1
+
+            is_free_talk = self.match(seg, target_text, 0.65)[0] == 0
+            if is_free_talk:
+                state["free_talk"] = 1
         else:
             state["correct"] = 1  # correct
 
