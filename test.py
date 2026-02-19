@@ -15,7 +15,7 @@
 import json
 import numpy as np
 import time
-import rnnoise
+import rnnoise # RNN based network for
 import jiwer
 import os
 import soundfile as sf
@@ -194,3 +194,4 @@ if __name__ == "__main__":
         ]
     )
     evaluate_asr(denoise)
+
