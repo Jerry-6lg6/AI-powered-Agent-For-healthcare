@@ -113,6 +113,8 @@ class speechRecognizer:
         time.sleep(0.5)
         self.beeper.play_beep()
         audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype="float32")
+        # Insert the speech enhancement model here
+
         sd.wait()
         print("Recording finished.")
         text = ""
@@ -127,18 +129,30 @@ class speechRecognizer:
                 result = self.model.transcribe(audio, language='en')
                 text = result["text"].strip()
                 print("🗣 You said:", text)
+                return text, 0, 0
             except Exception as e:
                 print("❌ Transcription error:", e)
 
+        count = 0
+        full_text = ""
+        seg_list = []
         if self.model_name == "faster_whisper":
             segments, _ = self.model.transcribe(audio, word_timestamps=True, language="en")
             for segment in segments:
                 print("[%.2fs -> %.2fs] %s" % (segment.start, segment.end, segment.text))
-                time_0 = segment.start
-                time_1 = segment.end
-                text = segment.text
+                if count == 0:
+                    time_0 = segment.start
 
-        return text, time_0, time_1
+                time_1 = segment.end
+                seg_list.append(segment.text)
+
+                # full_text = full_text.join(segment.text)
+
+            full_text = " ".join([segment for segment in seg_list])
+            print("result [%.2fs -> %.2fs] %s" % (time_0, time_1, full_text))
+
+            return full_text, time_1, time_1 if segments else ("", 0, 0)
+        return 0, 0, 0
 
 
 class RobustSpeechRecognizer(speechRecognizer):
