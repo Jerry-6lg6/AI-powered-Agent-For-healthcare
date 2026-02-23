@@ -15,7 +15,8 @@ SPEED = 1
 SPEED_SLOW = 0.85
 REST_TIME = 3
 CHANGEABLE = True
-UNCHANGEABLE = True
+UNCHANGEABLE = False
+MAX_RETRY_PER_QUESTION = 1
 
 from enum import Enum, auto
 
@@ -79,7 +80,7 @@ class Patient(Item):
 
 
 class Task(Item):
-    def __init__(self, id=0, name=None, instructions=None):
+    def __init__(self, id=0, name=None, instructions=None, time=None):
         super().__init__(id, name)
         self._last_result = None
         self.date = None
@@ -91,14 +92,15 @@ class Task(Item):
         self.rest_count = 0
         self.retry_count = 0
         self.speed = SPEED
+        self.time = time
 
     # Handle the special state in one function
-    def _handle_state(self, state, syth):
+    def _handle_state(self, state, syth, current_state: TaskState = None):
         if state.get("stop") == 1:
             if self.rest_count < 3:
                 self.rest(syth, 1)
                 self.rest_count += 1
-                return "retry"
+                return "return"
             else:
                 self.rest_count = 0
                 return "exit"
@@ -110,54 +112,53 @@ class Task(Item):
         elif state.get("dont_know") == 1:
             self.speed = SPEED_SLOW
             print(f"NEW SPEED : {self.speed}")
-            self.encourage(syth)
-            return "retry"
-        elif state.get("correct") == 0:
-            text = "Let's have another try."
-            syth.play_audio(text=text,
-                            filename=f"bridge.wav",
-                            playback_speed=self.speed,
-                            is_synthesize=True)
-            return "retry"
-        return "continue"
+            decision = self.encourage(syth)
+            return decision
 
-    # def _ask_until_done(self, question, syth, rcg, clf):
-    #     while True:
-    #         state, result = question.ask_question(syth, rcg, clf)
-    #
-    #         action = self._handle_state(state, syth)
-    #         if action == "retry":
-    #             continue
-    #         if action == "exit":
-    #             return "exit", None
-    #
-    #         return "answered", result
+        elif state.get("correct") == 0:
+            if current_state == TaskState.INTERACT_MAIN:
+                print("NO RETRY ON MAIN QUESTION")
+                return "continue"
+            return "retry"
+        elif state.get("correct") == 1:
+            return "correct"
+        return "continue"
 
     def ready_check(self, syth: speechSynthesize, rcg: speechRecognizer, clf: Classifier):
         text = "If you are ready to have this task, Please said yes after hearing the beep."
         syth.play_audio(
             text=text,
-            filename=f"ready_check.wav",
-            playback_speed=1,
-            is_synthesize=True
+            filename=f"ready_check_{self.speed}.wav",
+            playback_speed=self.speed,
+            is_synthesize=UNCHANGEABLE
         )
+
+    def _force_advance(self, state, bd_index, breakdown_list):
+        """
+        When retry budget exhausted, decide how FSM should move.
+        """
+
+        if state == TaskState.INTERACT_MAIN:
+            return TaskState.INTERACT_BREAKDOWN
+
+        elif state == TaskState.INTERACT_BREAKDOWN:
+            bd_index += 1
+            if bd_index >= len(breakdown_list):
+                return TaskState.NEXT
+            else:
+                return TaskState.INTERACT_BREAKDOWN
 
     # The main cognitive rehabilitation task( Orientation task ) would be implemented in this function
     def perform_task(self, syth: speechSynthesize, rcg: speechRecognizer, clf: Classifier):
 
         print(self.instructions)
-        intro = "Hi, my name is Jennet, your personal female medical assistant."
-        syth.play_audio(
-            text=intro,
-            filename=f"introduce.wav",
-            playback_speed=self.speed,
-            is_synthesize=True
-        )
         state = TaskState.INIT
         q_index = 0
         bd_index = 0
         current_question = None
         breakdown_list = []
+        pre_state = None
+        retry_count = 0
 
         while state not in (TaskState.FINISH, TaskState.EXIT):
 
@@ -166,8 +167,21 @@ class Task(Item):
                 if len(self.list) == 0:
                     state = TaskState.FINISH
                     continue
-
                 q_index = 0
+                intro = "Hi, my name is Jennet, your personal female medical assistant."
+                syth.play_audio(
+                    text=intro,
+                    filename=f"introduce_{self.speed}.wav",
+                    playback_speed=self.speed,
+                    is_synthesize=UNCHANGEABLE
+                )
+                syth.play_audio(
+                    text=self.instructions,
+                    filename=f"{self.name}_{self.id}_{self.speed}_instruction.wav",
+                    playback_speed=self.speed,
+                    is_synthesize=UNCHANGEABLE
+                )
+
                 state = TaskState.READY_CHECK
             # Ready check
             elif state == TaskState.READY_CHECK:
@@ -175,13 +189,16 @@ class Task(Item):
 
                 if check_result == "ready":
                     # Play instructions and proceed
-
+                    now = time.localtime()
+                    formatted_time = time.strftime("It is %I:%M %p on %A, %B %d, %Y.", now)
                     syth.play_audio(
-                        text=self.instructions,
-                        filename=f"{self.name}_{self.id}_instruction.wav",
+                        text=formatted_time,
+                        filename=f"{self.name}_{self.id}_{self.speed}_formatted_time.wav",
                         playback_speed=self.speed,
-                        is_synthesize=True
+                        is_synthesize=CHANGEABLE
                     )
+
+
                     state = TaskState.INTERACT_MAIN
 
                 elif check_result == "waiting":
@@ -199,26 +216,26 @@ class Task(Item):
                     confirm_text = "I heard you! Let's start now."
                     syth.play_audio(
                         text=confirm_text,
-                        filename="keyword_detected.wav",
+                        filename=f"keyword_detected_{self.speed}.wav",
                         playback_speed=self.speed,
-                        is_synthesize=True
+                        is_synthesize=UNCHANGEABLE
                     )
                     # Play instructions
                     syth.play_audio(
                         text=self.instructions,
-                        filename=f"{self.name}_{self.id}_instruction.wav",
+                        filename=f"{self.name}_{self.id}_{self.speed}_instruction.wav",
                         playback_speed=self.speed,
-                        is_synthesize=True
+                        is_synthesize=UNCHANGEABLE
                     )
                     state = TaskState.INTERACT_MAIN
 
                 elif keyword_result == "timeout":
-                    timeout_text = "I haven't heard from you. Let me check if you're ready again."
+                    timeout_text = " Let me check if you're ready again."
                     syth.play_audio(
                         text=timeout_text,
-                        filename="keyword_timeout.wav",
+                        filename=f"keyword_timeout_{self.speed}.wav",
                         playback_speed=self.speed,
-                        is_synthesize=True
+                        is_synthesize=UNCHANGEABLE
                     )
                     state = TaskState.READY_CHECK  # Go back to ready check
 
@@ -227,14 +244,27 @@ class Task(Item):
                 current_question = self.list[q_index]
 
                 q_state, result = current_question.ask_question(syth, rcg, clf, speed=self.speed)
-                action = self._handle_state(q_state, syth)
+                action = self._handle_state(q_state, syth, state)
                 print(f"The state of main question is {q_state}\nThe result is {result}\n the action is {action}")
 
                 if action == "exit":
                     state = TaskState.EXIT
-                elif action == "retry":
+                elif action == "retry_dont_know":
                     continue
-                elif action == "correct" or action == "continue":
+                elif action == "return":
+                    text = "Let's back to our task."
+                    syth.play_audio(text=text,
+                                    filename=f"return_{self.speed}.wav",
+                                    playback_speed=self.speed,
+                                    is_synthesize=UNCHANGEABLE)
+                elif action == "retry":
+                    text = "Let's have another try."
+                    syth.play_audio(text=text,
+                                    filename=f"bridge_{self.speed}.wav",
+                                    playback_speed=self.speed,
+                                    is_synthesize=UNCHANGEABLE)
+                    continue
+                elif action == "correct":
                     print("Main question is correct")
                     state = TaskState.NEXT
 
@@ -245,27 +275,59 @@ class Task(Item):
                     if len(breakdown_list) == 0:
                         state = TaskState.NEXT
                     else:
+                        text_bd = "Let's break it down"
+                        syth.play_audio(text=text_bd,
+                                        filename=f"breakdown_bridge.wav",
+                                        playback_speed=self.speed,
+                                        is_synthesize=UNCHANGEABLE)
+                        bd_retry_used = False
                         state = TaskState.INTERACT_BREAKDOWN
+
             # If the main question is worry => ask breakdown question
             elif state == TaskState.INTERACT_BREAKDOWN:
 
                 bd_question = breakdown_list[bd_index]
-
                 q_state, result = bd_question.ask_question(syth, rcg, clf, speed=self.speed)
-
-                decision = self._handle_state(q_state, syth)
+                decision = self._handle_state(q_state, syth, state)
 
                 if decision == "exit":
                     state = TaskState.EXIT
 
+                elif decision == "return":
+                    text = "Let's back to our task."
+                    syth.play_audio(text=text,
+                                    filename=f"return_{self.speed}.wav",
+                                    playback_speed=self.speed,
+                                    is_synthesize=UNCHANGEABLE)
                 elif decision == "retry":
-                    continue
+                    if not bd_retry_used:
+                        bd_retry_used = True
+                        text = "Let's try that once more."
+                        syth.play_audio(text=text,
 
-                elif decision == "correct":
-                    state = TaskState.NEXT
+                                        filename=f"bd_retry_once_{self.speed}.wav",
 
+                                        playback_speed=self.speed,
+
+                                        is_synthesize=UNCHANGEABLE)
+                        continue  # Back to current breakdown
+                    else:
+                        # After retry → Next breakdown
+                        bd_retry_used = False
+                        bd_index += 1
+                        if bd_index >= len(breakdown_list):
+                            state = TaskState.NEXT
+                        else:
+                            state = TaskState.INTERACT_BREAKDOWN
+                            text = "Let's move on."
+                            syth.play_audio(text=text,
+                                            filename=f"bd_move_on_{self.speed}.wav",
+                                            playback_speed=self.speed,
+                                            is_synthesize=UNCHANGEABLE)
                 else:  # still wrong
+                    bd_retry_used = False
                     bd_index += 1
+                    retry_count = 0
                     if bd_index >= len(breakdown_list):
                         state = TaskState.NEXT
                     else:
@@ -273,15 +335,15 @@ class Task(Item):
 
             # If the main question is correct => next questiion
             elif state == TaskState.NEXT:
-                text = self.list[q_index].end_text
-                if text is not None:
-                    syth.play_audio(text=text,
-                                    filename=f"main_q_{q_index}_end.wav",
-                                    playback_speed=self.speed,
-                                    is_synthesize=True)
-
                 q_index += 1
                 if q_index >= len(self.list):
+                    q_index -= 1
+                    text = self.list[q_index].end_text
+                    if text is not None:
+                        syth.play_audio(text=text,
+                                        filename=f"main_q_{q_index}_{self.speed}_end.wav",
+                                        playback_speed=self.speed,
+                                        is_synthesize=UNCHANGEABLE)
                     state = TaskState.FINISH
                 else:
                     state = TaskState.INTERACT_MAIN
@@ -320,8 +382,8 @@ class Task(Item):
     def finish_task(self, syth: speechSynthesize):
         text = "That is the end of the task. See you."
         syth.play_audio(text=text,
-                        filename=fr"break.wav",
-                        is_synthesize=True,
+                        filename=fr"break_{self.speed}.wav",
+                        is_synthesize=UNCHANGEABLE,
                         playback_speed=self.speed)
         return 0
 
@@ -330,27 +392,34 @@ class Task(Item):
         if self.retry_count < 1:
             text = "Don't worry, I would slow down a little bit, Let's have another try"
             syth.play_audio(text=text,
-                            filename=fr"encourage.wav",
-                            is_synthesize=True,
+                            filename=fr"encourage_{self.speed}.wav",
+                            is_synthesize=UNCHANGEABLE,
                             playback_speed=self.speed)
+            return "retry_dont_know"
         else:
             self.retry_count = 0
             text = "What about the next one."
             syth.play_audio(text=text,
-                            filename=fr"next.wav",
-                            is_synthesize=True,
+                            filename=fr"next_{self.speed}.wav",
+                            is_synthesize=UNCHANGEABLE,
                             playback_speed=self.speed)
-            return 0
+            return "continue"
 
     def rest(self, syth: speechSynthesize, t: int):
         if self.rest_count < 3:
             duration = t * 60
-            text = f"Let's have a {t} minutes rest."
-            syth.play_audio(text=text,
-                            filename=fr"rest_{t}.wav",
-                            is_synthesize=True,
+            text_0 = f"Let's have a {t} minutes rest."
+            syth.play_audio(text=text_0,
+                            filename=fr"rest_{t}_{self.speed}.wav",
+                            is_synthesize=CHANGEABLE,
                             playback_speed=self.speed)
             time.sleep(duration)
+            text_1 = "Let's go back to the task."
+            syth.play_audio(text=text_1,
+                            filename=fr"rest_{t}_{self.speed}.wav",
+                            is_synthesize=UNCHANGEABLE,
+                            playback_speed=self.speed)
+
         else:
             self.finish_task(syth)
             return 0
@@ -363,9 +432,9 @@ class Task(Item):
         text = "If you are ready to start this task, please say yes after hearing the beep."
         syth.play_audio(
             text=text,
-            filename=f"ready_check.wav",
+            filename=f"ready_check_{self.speed}.wav",
             playback_speed=self.speed,
-            is_synthesize=True
+            is_synthesize=UNCHANGEABLE
         )
 
         time.sleep(1)
@@ -383,12 +452,12 @@ class Task(Item):
 
         # Patient is ready
         if state.get("correct") == 1:
-            confirm_text = "Great! Let's begin."
+            confirm_text = "Great, Let's begin."
             syth.play_audio(
                 text=confirm_text,
-                filename="ready_confirmed.wav",
+                filename=f"ready_confirmed_{self.speed}.wav",
                 playback_speed=self.speed,
-                is_synthesize=True
+                is_synthesize=UNCHANGEABLE
             )
             return "ready"
 
@@ -397,9 +466,9 @@ class Task(Item):
             wait_text = f"No problem. I'll wait you for {WAIT_TIME} minute."
             syth.play_audio(
                 text=wait_text,
-                filename="waiting_for_keyword.wav",
+                filename=f"waiting_for_keyword_{self.speed}.wav",
                 playback_speed=self.speed,
-                is_synthesize=True
+                is_synthesize=CHANGEABLE
             )
             return "waiting"
 
@@ -479,7 +548,7 @@ class Question(Item):
 
         print(self.question)
         syth.play_audio(text=self.question,
-                        filename=f"{self.name}_{self.id}_question.wav",
+                        filename=f"{self.name}_{self.id}_{speed}_question.wav",
                         playback_speed=speed
                         )
         """
@@ -503,9 +572,9 @@ class Question(Item):
         if result == 1:
             self.score = 1
             syth.play_audio(text=self.correct_response,
-                            filename=f"{self.name}_{self.id}_correct_response.wav",
+                            filename=f"{self.name}_{self.id}_{speed}_correct_response.wav",
                             playback_speed=speed,
-                            is_synthesize=True)
+                            is_synthesize=CHANGEABLE)
             self.state_list.append(state)
             return state, result
         # If detect don't detect the correct answer =>go through all the answer of sub-questions
@@ -524,9 +593,9 @@ class Question(Item):
 
                 syth.play_audio(
                     text=self.correct_response,
-                    filename=f"{self.name}_{self.id}_correct_response.wav",
+                    filename=f"{self.name}_{self.id}_{speed}_correct_response.wav",
                     playback_speed=speed,
-                    is_synthesize=True
+                    is_synthesize=CHANGEABLE
                 )
                 self.state_list.append(final_state)
 
@@ -535,9 +604,9 @@ class Question(Item):
             # ---- Case 3: incorrect ----
         syth.play_audio(
             text=self.incorrect_response,
-            filename=f"{self.name}_{self.id}_incorrect_response.wav",
+            filename=f"{self.name}_{self.id}_{speed}_incorrect_response.wav",
             playback_speed=speed,
-            is_synthesize=True
+            is_synthesize=CHANGEABLE
         )
 
         print(f"the state is {state}")
@@ -556,14 +625,15 @@ def ordinal(n: int) -> str:
 
 
 if __name__ == "__main__":
+
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
     # Initial question and task
-    t_0 = "What specific date of today? "
-    t_00 = "what year is it this year? "
-    t_01 = "What mouth is it this mouth? "
-    t_02 = "Which day of this month is it today? "
+    t_0 = "What the date is today? "
+    t_00 = "what is the year? "
+    t_01 = "What is the month? "
+    t_02 = "What is the date today"
     t_03 = "What day is it today in this week? "
 
     today = datetime.date.today()
@@ -583,7 +653,7 @@ if __name__ == "__main__":
 
     now = time.localtime()
     formatted_time = time.strftime("It is %I:%M %p on %A, %B %d, %Y.", now)
-    instruction = f"{formatted_time}. There is an orientation task in your planner, try to answer the question after hearing the beep and avoid any guessing."
+    instruction = f" There is an orientation task in your planner, try to answer the question after hearing the beep."
 
     print(
         f"{type(year)}...{year}...{type(month)}...{month}...{type(day_ordinal)}...{day_ordinal}...{type(weekday)}...{weekday}")
@@ -598,14 +668,14 @@ if __name__ == "__main__":
     q_2 = Question(q_id=3, name="bd_3", question=t_02, answer=a_02, is_synthesize=True)
     q_3 = Question(q_id=4, name="bd_4", question=t_03, answer=a_03, is_synthesize=True)
 
-    # list_bd = [q_0, q_1, q_2, q_3]
-    list_bd = [q_1]
+    list_bd = [q_0, q_1, q_2]
+    # list_bd = [q_1]
 
     q_main.set_list(list_bd)
     list_q = [q_main]
     task_0.set_list(list_q)
 
-    sr = speechRecognizer(model_name="faster_whisper")
+    sr = speechRecognizer(model_name="faster_whisper", device="cpu")
     tts = speechSynthesize(model_name="tts_models/multilingual/multi-dataset/xtts_v2")
     classifier_0 = Classifier()
 
