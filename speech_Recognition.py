@@ -79,7 +79,7 @@ class speechRecognizer:
             self.model = whisper.load_model(model_size, device=device)
             print("Model loaded successfully")
         if model_name == "faster_whisper":
-            self.model = WhisperModel(model_size, device="cuda", compute_type="float16")
+            self.model = WhisperModel(model_size, device=device, compute_type="int8")
         self.beeper = beeper()
         torch.set_num_threads(1)
         self.vad_model, self.vad_utils = torch.hub.load(
