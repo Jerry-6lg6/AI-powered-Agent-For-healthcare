@@ -29,6 +29,8 @@ DONT_KNOW_VOCAB = [
     "I don't know what you mean"
 ]
 STOP_VOCAB = [
+    "I wanna rest.",
+    'I want a rest',
     "stop",
     "stop it",
     "please stop",
@@ -79,7 +81,11 @@ TURN_WORDS = [
     "but", "however", "though", "although",
     "yet", "still", "instead", "no", 'No'
 ]
-
+GLOBAL_VOCABS = {
+    "dont_know": DONT_KNOW_VOCAB,
+    "stop": STOP_VOCAB,
+    "emergency": EMERGENCY_VOCAB
+}
 SPLIT_PUNCT = r"[,.!?;:]"
 
 
@@ -115,6 +121,7 @@ class Classifier:
             self.device = device
         self.model.to(self.device)
         self.max_length = max_length
+        self.build_faiss_index()
 
     def embedding(self, input_text: Union[str, List[str]]) -> np.ndarray:
         single = isinstance(input_text, str)
@@ -133,6 +140,42 @@ class Classifier:
         embeddings = self.normalize_vectors(embeddings)
 
         return embeddings if not single else embeddings[0]
+
+    def build_faiss_index(self):
+
+        self.faiss_indexes = {}
+        self.faiss_text_map = {}
+
+        for key, vocab in GLOBAL_VOCABS.items():
+            # 1 embedding vocab
+            vecs = self.embedding(vocab)
+
+            dim = vecs.shape[1]
+
+            # 2 create faiss index
+            index = faiss.IndexFlatIP(dim)  # cosine similarity
+
+            # vectors already normalized
+            index.add(vecs.astype(np.float32))
+
+            # save
+            self.faiss_indexes[key] = index
+            self.faiss_text_map[key] = vocab
+
+    def faiss_match(self, text, vocab_type, threshold):
+
+        vec = self.embedding(text).astype(np.float32).reshape(1, -1)
+
+        index = self.faiss_indexes[vocab_type]
+
+        scores, ids = index.search(vec, 1)
+
+        score = scores[0][0]
+
+        if score >= threshold:
+            return True, score
+        else:
+            return False, score
 
     @staticmethod
     def normalize_vectors(v: Union[np.ndarray, torch.Tensor], eps: float = 1e-12) -> np.ndarray:
@@ -196,7 +239,7 @@ class Classifier:
 
         segments = []
         for p in parts:
-            sub = re.split(r"\b(" + "|".join(TURN_WORDS) + r")\b", p)
+            sub = re.split(r"(?:(?<=^)|(?<=[,.!?]))\s*(" + "|".join(TURN_WORDS) + r")\b", p)
             for s in sub:
                 s = s.strip()
                 if s and s not in TURN_WORDS:
@@ -258,7 +301,7 @@ class Classifier:
         return label, sim_score
 
     def state_match(self, input_text: str, target_text: str):
-
+        # Setting required state
         state = {
             "correct": 0,
             "dont_know": 0,
@@ -270,20 +313,22 @@ class Classifier:
         score = 0
         target_text = target_text.lower()
 
-        # 1. Cleaning
+        # 1. Cleaning => Remove pause and segment the text
         clean_text, segments, has_turn = self.cleaning(input_text)
 
         # print(segments)
+        # 2. Retrieval all segments
         for seg in segments:
             seg = seg.strip()
             if not seg:
                 continue
 
             # 3. Special three types of semantic detection（embedding match）
-            is_dk = self.match(seg, DONT_KNOW_VOCAB, 0.85)[0] == 0
-            is_stop = self.match(seg, STOP_VOCAB, 0.90)[0] == 0
-            is_emer = self.match(seg, EMERGENCY_VOCAB, 0.80)[0] == 0
+            is_dk, _ = self.faiss_match(seg, "dont_know", 0.85)
+            is_stop, _ = self.faiss_match(seg, "stop", 0.90)
+            is_emer, _ = self.faiss_match(seg, "emergency", 0.80)
 
+            # If get special cases => Return
             special_case_detected = False
             if is_dk:
                 state["dont_know"] = 1
@@ -322,19 +367,22 @@ class Classifier:
                 if len(valid_segments) == 0:
                     state["silence"] = 1
 
-            is_free_talk = self.match(seg, target_text, 0.65)[0] == 0
+            is_free_talk = self.match(clean_text, target_text, 0.55)[0] == 0
             if is_free_talk:
                 state["free_talk"] = 1
         else:
             state["correct"] = 1  # correct
+        if score >= 1:
+            score = 1
 
         return state, score
 
 
 if __name__ == "__main__":
     target = "February"
-    input_list = [" February. NO it is January.", "It is January", "This month is February", "NO, stop it",
-                  "I'm feeling pain, help", "I don't know"]
+    input_list = [" it is January. NO,February. ", "It is January","It is February. It is  February", "This month is February", "NO, stop it",
+                  "I'm feeling pain, help", "I have no idea.", "I have no idea what are you talking about.",
+                  "I don't know.", "I don't know what you said."]
     classifier_0 = Classifier()
     # Test of the match function
     # for i in input_list:
