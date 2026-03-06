@@ -124,15 +124,6 @@ class Task(Item):
             return "correct"
         return "continue"
 
-    def ready_check(self, syth: speechSynthesize, rcg: speechRecognizer, clf: Classifier):
-        text = "If you are ready to have this task, Please said yes after hearing the beep."
-        syth.play_audio(
-            text=text,
-            filename=f"ready_check_{self.speed}.wav",
-            playback_speed=self.speed,
-            is_synthesize=UNCHANGEABLE
-        )
-
     def _force_advance(self, state, bd_index, breakdown_list):
         """
         When retry budget exhausted, decide how FSM should move.
@@ -168,7 +159,7 @@ class Task(Item):
                     state = TaskState.FINISH
                     continue
                 q_index = 0
-                intro = "Hi, my name is Jennet, your personal female medical assistant."
+                intro = "Hello ,  my name is  Jennet , your personal female medical assistant."
                 syth.play_audio(
                     text=intro,
                     filename=f"introduce_{self.speed}.wav",
@@ -190,14 +181,13 @@ class Task(Item):
                 if check_result == "ready":
                     # Play instructions and proceed
                     now = time.localtime()
-                    formatted_time = time.strftime("It is %I:%M %p on %A, %B %d, %Y.", now)
+                    formatted_time = time.strftime("It is  %I:%M  %p  on %A ,  %B %d , %Y.", now)
                     syth.play_audio(
                         text=formatted_time,
                         filename=f"{self.name}_{self.id}_{self.speed}_formatted_time.wav",
                         playback_speed=self.speed,
                         is_synthesize=CHANGEABLE
                     )
-
 
                     state = TaskState.INTERACT_MAIN
 
@@ -299,23 +289,30 @@ class Task(Item):
                                     filename=f"return_{self.speed}.wav",
                                     playback_speed=self.speed,
                                     is_synthesize=UNCHANGEABLE)
+                elif decision == "retry_dont_know":
+                    continue
                 elif decision == "retry":
                     if not bd_retry_used:
                         bd_retry_used = True
-                        text = "Let's try that once more."
-                        syth.play_audio(text=text,
+                        if decision == "retry_dont_know":
+                            bd_retry_used = True
+                        if decision == "retry":
+                            text = "Let's try that once more."
+                            syth.play_audio(text=text,
 
-                                        filename=f"bd_retry_once_{self.speed}.wav",
+                                            filename=f"bd_retry_once_{self.speed}.wav",
 
-                                        playback_speed=self.speed,
+                                            playback_speed=self.speed,
 
-                                        is_synthesize=UNCHANGEABLE)
+                                            is_synthesize=UNCHANGEABLE)
+
                         continue  # Back to current breakdown
                     else:
                         # After retry → Next breakdown
                         bd_retry_used = False
                         bd_index += 1
                         if bd_index >= len(breakdown_list):
+                            print("NO MORE BREAKDOWN")
                             state = TaskState.NEXT
                         else:
                             state = TaskState.INTERACT_BREAKDOWN
@@ -363,7 +360,7 @@ class Task(Item):
         else:
             for i in self.list:
                 self.score += i.score
-            self.error_rate = self.score / len(list)
+            self.error_rate = self.score / len(self.list)
             return 0
 
     def set_instructions(self, i_text):
@@ -377,7 +374,7 @@ class Task(Item):
             total_time = 0.0
             for i in self.list:
                 total_time += i.thingking_time
-            self.thinking_time = total_time / len(list)
+            self.thinking_time = total_time / len(self.list)
 
     def finish_task(self, syth: speechSynthesize):
         text = "That is the end of the task. See you."
@@ -390,7 +387,7 @@ class Task(Item):
     def encourage(self, syth: speechSynthesize):
 
         if self.retry_count < 1:
-            text = "Don't worry, I would slow down a little bit, Let's have another try"
+            text = "Don't worry, I would slow down a little bit, Let's have another try。 "
             syth.play_audio(text=text,
                             filename=fr"encourage_{self.speed}.wav",
                             is_synthesize=UNCHANGEABLE,
@@ -398,11 +395,11 @@ class Task(Item):
             return "retry_dont_know"
         else:
             self.retry_count = 0
-            text = "What about the next one."
-            syth.play_audio(text=text,
-                            filename=fr"next_{self.speed}.wav",
-                            is_synthesize=UNCHANGEABLE,
-                            playback_speed=self.speed)
+            # text = "What about the next one."
+            # syth.play_audio(text=text,
+            #                 filename=fr"next_{self.speed}.wav",
+            #                 is_synthesize=UNCHANGEABLE,
+            #                 playback_speed=self.speed)
             return "continue"
 
     def rest(self, syth: speechSynthesize, t: int):
@@ -429,7 +426,7 @@ class Task(Item):
         Check if patient is ready to start.
         Returns: 'ready', 'waiting', or 'exit'
         """
-        text = "If you are ready to start this task, please say yes after hearing the beep."
+        text = "If you are ready  to start this task  ,  please say yes  after hearing the beep."
         syth.play_audio(
             text=text,
             filename=f"ready_check_{self.speed}.wav",
@@ -561,7 +558,10 @@ class Question(Item):
 
         self.thinking_time = time_0
         self.speaking_time = time_1 - time_0
+        t_0 = time.time()
         state, score = clf.state_match(input_text=text, target_text=self.answer)
+        t_1 = time.time()
+        print(f"The processing time of classifier is {t_0 - t_1}")
         result = state["correct"]
         print(f"the result is {result}, input_text is P{text}, target test is {self.answer}")
 
@@ -577,7 +577,7 @@ class Question(Item):
                             is_synthesize=CHANGEABLE)
             self.state_list.append(state)
             return state, result
-        # If detect don't detect the correct answer =>go through all the answer of sub-questions
+        # If detect don't detect the correct answer => go through all the answer of sub-questions
         if len(self.list) > 0:
 
             matched = 0
@@ -630,11 +630,11 @@ if __name__ == "__main__":
         torch.cuda.empty_cache()
 
     # Initial question and task
-    t_0 = "What the date is today? "
-    t_00 = "what is the year? "
-    t_01 = "What is the month? "
-    t_02 = "What is the date today"
-    t_03 = "What day is it today in this week? "
+    t_0 = " What the date is today? "
+    t_00 = " what is the year? "
+    t_01 = " What is the month? "
+    t_02 = " What is the date today? "
+    t_03 = " What day is it today in this week? "
 
     today = datetime.date.today()
     year = today.strftime("%Y")
@@ -653,7 +653,7 @@ if __name__ == "__main__":
 
     now = time.localtime()
     formatted_time = time.strftime("It is %I:%M %p on %A, %B %d, %Y.", now)
-    instruction = f" There is an orientation task in your planner, try to answer the question after hearing the beep."
+    instruction = f" There is  an orientation task  in your planner,  try to answer the question  after hearing the beep."
 
     print(
         f"{type(year)}...{year}...{type(month)}...{month}...{type(day_ordinal)}...{day_ordinal}...{type(weekday)}...{weekday}")
@@ -675,7 +675,7 @@ if __name__ == "__main__":
     list_q = [q_main]
     task_0.set_list(list_q)
 
-    sr = speechRecognizer(model_name="faster_whisper", device="cpu")
+    sr = speechRecognizer(model_name="faster_whisper", device="cuda")
     tts = speechSynthesize(model_name="tts_models/multilingual/multi-dataset/xtts_v2")
     classifier_0 = Classifier()
 
