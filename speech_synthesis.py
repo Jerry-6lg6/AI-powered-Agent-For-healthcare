@@ -69,7 +69,9 @@ class speechSynthesize:
 
         # Loading TTS model
         print(f"Loading TTS model: {model_name} (GPU={gpu})...")
-        self.tts_api = TTS(model_name, gpu=gpu)
+        self.tts_api = TTS(model_name)
+        if self.gpu:
+            self.tts_api.to("cuda")
 
         # Ensure the output directory exists
         if not os.path.exists(self.output_dir):
@@ -97,7 +99,7 @@ class speechSynthesize:
                 file_path=output_path,
                 speaker="Ana Florence",  # or use speaker parameter
                 language="en",
-                speed=speed
+                speed=speed,
             )
         else:
             # For other TTS models
@@ -115,7 +117,7 @@ class speechSynthesize:
         filepath = os.path.join(self.output_dir, filename)
         self.is_playing.set()
         self.stop_signal.clear()
-
+        # If audio do not exists or need to synthesize => Synthesize new audio
         if not os.path.exists(filepath) or is_synthesize:
             if text is None:
                 raise ValueError("Text must be provided for synthesis")
@@ -126,6 +128,7 @@ class speechSynthesize:
             )
             filepath = os.path.join(self.output_dir, filename)
 
+        # If need to change playback speed => Utilize the WSOLA function to change
         if playback_speed != 1.0:
             # y, sr = librosa.load(filepath, sr=None, mono=True)
             #
