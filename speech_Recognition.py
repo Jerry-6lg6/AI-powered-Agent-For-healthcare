@@ -12,10 +12,12 @@ from faster_whisper import WhisperModel
 from clearvoice import ClearVoice
 import os
 import queue
+from tools import SpectralSubtraction
 
 os.environ['TORCH_HOME'] = r'C:\torch_cache'
 CHUNK_DURATION = 0.5
 MAX_SILENCE_CHUNKS = 4
+LOGPROB_THRESHOLD = -1.0   # segments below this are likely hallucinated
 
 
 class beeper:
@@ -95,9 +97,11 @@ class VADProcessor:
 
 
 class speechRecognizer:
-    def __init__(self, model_name="whisper", model_size="medium", device="cuda"):
+    def __init__(self, model_name="whisper", model_size="medium", device="cuda",
+                 denoise: bool = False):
         self.model_name = model_name
-        print(f"Loading moodel{model_name}_{model_size}")
+        self.denoise    = denoise
+        print(f"Loading model {model_name}_{model_size}")
         # Model setting on CPU
         if model_name == "whisper":
             self.model = whisper.load_model(model_size, device=device)
@@ -108,6 +112,13 @@ class speechRecognizer:
 
         torch.set_num_threads(1)
         self.vad = VADProcessor()
+
+        # Optional denoising plugin
+        if self.denoise:
+            self._denoiser = SpectralSubtraction()
+            print("[ASR] Denoising enabled (SpectralSubtraction)")
+        else:
+            self._denoiser = None
 
     def _record_with_vad(self, max_duration=15, samplerate=16000):
         """
@@ -186,22 +197,33 @@ class speechRecognizer:
         return None
 
     def record_audio(self, duration=10, samplerate=16000):
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         print(f"Recording (VAD-controlled, up to {duration}s)... Speak after hearing the beep!")
         time.sleep(0.5)
         self.beeper.play_beep()
 
-        # Replace fixed-duration sd.rec() with VAD-controlled recording
+        # VAD-controlled recording
         audio = self._record_with_vad(max_duration=duration, samplerate=samplerate)
 
+        # ── Optional denoising ────────────────────────────────────────
+        if self._denoiser is not None and len(audio) > 0:
+            try:
+                audio = self._denoiser.process(audio, samplerate).astype(np.float32)
+                print("[ASR] Denoising applied")
+            except Exception as e:
+                print(f"[ASR] Denoising failed, using raw audio: {e}")
+
         print("Recording finished.")
-        text = ""
+        text   = ""
         time_0 = 0.0
         time_1 = 0.0
+
         with torch.no_grad():
             if self.model_name == "whisper":
                 try:
                     result = self.model.transcribe(audio, language='en')
-                    text = result["text"].strip()
+                    text   = result["text"].strip()
                     print("🗣 You said:", text)
                     return text, 0, 0
                 except Exception as e:
@@ -209,22 +231,41 @@ class speechRecognizer:
                     return "", 0, 0
 
             if self.model_name == "faster_whisper":
-                count = 0
+                count    = 0
                 seg_list = []
+                logprobs = []
 
-                segments, _ = self.model.transcribe(audio, word_timestamps=True, language="en")
+                segments, _ = self.model.transcribe(
+                    audio, word_timestamps=True, language="en"
+                )
+
                 for segment in segments:
-                    print("[%.2fs -> %.2fs] %s" % (segment.start, segment.end, segment.text))
+                    print("[%.2fs -> %.2fs] %s" % (
+                        segment.start, segment.end, segment.text))
+
+                    # ── Confidence filtering ──────────────────────────
+                    lp = getattr(segment, "avg_logprob", 0.0)
+                    logprobs.append(lp)
+
                     if count == 0:
                         time_0 = segment.start
                         count += 1
                     time_1 = segment.end
                     seg_list.append(segment.text)
 
+                # ── Reject hallucinated transcriptions ────────────────
+                if logprobs:
+                    avg_lp = sum(logprobs) / len(logprobs)
+                    print(f"[ASR] avg_logprob: {avg_lp:.3f}")
+                    if avg_lp < LOGPROB_THRESHOLD:
+                        print(f"[ASR] ⚠ Transcription rejected "
+                              f"(avg_logprob {avg_lp:.3f} < {LOGPROB_THRESHOLD}) "
+                              f"— treating as silence")
+                        return "", 0, 0
+
                 full_text = " ".join(seg_list)
                 print("result [%.2fs -> %.2fs] %s" % (time_0, time_1, full_text))
                 return (full_text, time_0, time_1) if seg_list else ("", 0, 0)
-
 
         return "", 0, 0
 
