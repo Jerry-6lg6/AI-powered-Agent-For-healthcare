@@ -72,7 +72,84 @@ EMERGENCY_VOCAB = [
     "someone is attacking me",
     "I need medical help",
     "it's an emergency situation",
-    "I might die"
+    "I might die",
+    "I am not feeling well",
+    "I don't feel well",
+    "I feel sick",
+    "I feel dizzy",
+    "I feel faint",
+    "I need assistance",
+    "I need help",
+    "I need a nurse",
+    "I need a doctor",
+    "please get a nurse",
+    "please get help",
+    "something is wrong",
+    "I want to die",
+    "I want to hurt myself",
+    "I can't move",
+    "I feel very unwell",
+    "I am in pain",
+    "my chest hurts"
+]
+
+REPEAT_VOCAB = [
+    "can you repeat that",
+    "could you repeat that",
+    "please repeat that",
+    "repeat the question",
+    "say that again",
+    "can you say that again",
+    "could you say that again",
+    "please say that again",
+    "I did not hear you",
+    "I didn't hear you",
+    "I couldn't hear you",
+    "I can't hear you",
+    "I could not hear that",
+    "pardon",
+    "pardon me",
+    "excuse me",
+    "what did you say",
+    "what was that",
+    "come again",
+    "sorry I missed that",
+    "I missed that",
+    "can you speak louder",
+    "speak up please",
+    "I didn't catch that",
+    "I did not catch that",
+]
+
+REQUIRE_VOCAB = [
+    "I want some water",
+    "I want something to eat",
+    "I want some food",
+    "I want a drink",
+    "I want some tea",
+    "I want some coffee",
+    "I am hungry",
+    "I am thirsty",
+    "I need some water",
+    "I need something to eat",
+    "I need food",
+    "I need a drink",
+    "please bring me some water",
+    "please bring me some food",
+    "please get me something to eat",
+    "please get me a drink",
+    "could you bring me some water",
+    "could you bring me something to eat",
+    "could you get me some food",
+    "could you get me a drink",
+    "can I have some water",
+    "can I have something to eat",
+    "can I have some food",
+    "can I get a drink",
+    "I would like some water",
+    "I would like something to eat",
+    "I would like some food",
+    "I would like a drink",
 ]
 
 NEGATIONS = ["not", "no", "never", "n't", "cannot", "can't", "dont", "don't"]
@@ -84,7 +161,9 @@ TURN_WORDS = [
 GLOBAL_VOCABS = {
     "dont_know": DONT_KNOW_VOCAB,
     "stop": STOP_VOCAB,
-    "emergency": EMERGENCY_VOCAB
+    "emergency": EMERGENCY_VOCAB,
+    "repeat": REPEAT_VOCAB,
+    "require": REQUIRE_VOCAB,
 }
 SPLIT_PUNCT = r"[,.!?;:]"
 
@@ -98,13 +177,13 @@ def has_negation(text: str, window: int = 5) -> bool:
 
 
 class Classifier:
-    def __init__(self, embedding_model: str = "bge-large-en-v1.5",
+    def __init__(self, embedding_model: str = "BAAI/bge-large-en-v1.5",
                  max_length: int = 1024,
                  device: str = None):
 
-        if embedding_model == "bge-large-en-v1.5":
-            self.tokenizer = AutoTokenizer.from_pretrained(embedding_model)
-            self.model = AutoModel.from_pretrained(embedding_model)
+        if embedding_model == "BAAI/bge-large-en-v1.5":
+            self.tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-large-en-v1.5")
+            self.model = AutoModel.from_pretrained("BAAI/bge-large-en-v1.5")
 
         if embedding_model == "Qwen/Qwen3-Embedding-0.6B":
             # Load the model
@@ -203,9 +282,9 @@ class Classifier:
                     input_text: str,
                     target_text: str
                     ):
-        input_text = str(input_text)
+        input_text  = str(input_text)
         target_text = str(target_text)
-        if target_text in input_text:
+        if re.search(rf"\b{re.escape(target_text)}\b", input_text):
             return 1
         else:
             return 0
@@ -300,82 +379,244 @@ class Classifier:
         label = 0 if sim_score >= threshold else 1
         return label, sim_score
 
-    def state_match(self, input_text: str, target_text: str):
-        # Setting required state
+    # ──────────────────────────────────────────────────────────────────
+    # ENSEMBLE HELPERS
+    # ──────────────────────────────────────────────────────────────────
+
+    # Written-out number words → digit strings for common orientation answers
+    _NUMBER_WORDS = {
+        "zero":"0","one":"1","two":"2","three":"3","four":"4",
+        "five":"5","six":"6","seven":"7","eight":"8","nine":"9",
+        "ten":"10","eleven":"11","twelve":"12","thirteen":"13",
+        "fourteen":"14","fifteen":"15","sixteen":"16","seventeen":"17",
+        "eighteen":"18","nineteen":"19","twenty":"20","twenty one":"21",
+        "twenty two":"22","twenty three":"23","twenty four":"24",
+        "twenty five":"25","twenty six":"26","twenty seven":"27",
+        "twenty eight":"28","twenty nine":"29","thirty":"30",
+        "thirty one":"31",
+        # Years spoken as pairs e.g. "twenty twenty six"
+        "twenty twenty":"2020","twenty twenty one":"2021",
+        "twenty twenty two":"2022","twenty twenty three":"2023",
+        "twenty twenty four":"2024","twenty twenty five":"2025",
+        "twenty twenty six":"2026","twenty twenty seven":"2027",
+    }
+
+    # Month name variants (abbreviations → full names)
+    _MONTH_VARIANTS = {
+        "jan":"january","feb":"february","mar":"march","apr":"april",
+        "jun":"june","jul":"july","aug":"august","sep":"september",
+        "sept":"september","oct":"october","nov":"november","dec":"december",
+    }
+
+    # Weekday variants
+    _DAY_VARIANTS = {
+        "mon":"monday","tue":"tuesday","tues":"tuesday",
+        "wed":"wednesday","thu":"thursday","thur":"thursday","thurs":"thursday",
+        "fri":"friday","sat":"saturday","sun":"sunday",
+    }
+
+    def _normalise_text(self, text: str) -> str:
+        """
+        Normalise spoken variants to their canonical form.
+        e.g. "twenty twenty six" → "2026", "feb" → "february"
+        """
+        t = text.lower().strip()
+        # replace written-out years / numbers
+        for word, digit in sorted(self._NUMBER_WORDS.items(),
+                                   key=lambda x: -len(x[0])):
+            t = re.sub(rf"\b{re.escape(word)}\b", digit, t)
+        # replace month abbreviations
+        for abbr, full in self._MONTH_VARIANTS.items():
+            t = re.sub(rf"\b{re.escape(abbr)}\b", full, t)
+        # replace day abbreviations
+        for abbr, full in self._DAY_VARIANTS.items():
+            t = re.sub(rf"\b{re.escape(abbr)}\b", full, t)
+        return t
+
+    def _stage1_string(self, clean_input: str, target: str) -> bool:
+        """
+        Stage 1 — fast whole-word string match.
+        Uses word boundaries so 'yes' does not match inside 'yesterday'.
+        """
+        return bool(re.search(rf"\b{re.escape(target)}\b", clean_input))
+
+    def _stage2_keyword(self, clean_input: str, target: str) -> bool:
+        """
+        Stage 2 — normalised whole-word keyword match.
+        Normalises both input and target (number words, abbrevs)
+        then checks for whole-word match. No embeddings used.
+        """
+        norm_input  = self._normalise_text(clean_input)
+        norm_target = self._normalise_text(target)
+        return bool(re.search(rf"\b{re.escape(norm_target)}\b", norm_input))
+
+    # ──────────────────────────────────────────────────────────────────
+
+    def state_match(self, input_text: str, target_text: str,
+                    context: list = None):
+        """
+        Classify a patient response using a 3-stage ensemble pipeline:
+
+          Stage 1 — Exact string match    (instant, no model)
+          Stage 2 — Normalised keyword    (fast, no model)
+          Stage 3 — BGE + FAISS semantic  (full model, only if 1+2 fail)
+
+        Special states (emergency, stop, dont_know, repeat) always go
+        through FAISS — they cannot be safely string-matched.
+
+        Args:
+            input_text:  What the patient said.
+            target_text: The expected correct answer.
+            context:     Optional list of recent exchanges
+                         [{"question": ..., "answer": ...}, ...]
+                         Last 2 entries prepended for context-aware scoring.
+
+        Returns:
+            (state dict, score int, confidence float)
+        """
         state = {
-            "correct": 0,
+            "correct":   0,
             "dont_know": 0,
-            "stop": 0,
+            "stop":      0,
             "emergency": 0,
+            "repeat":    0,
+            "require":   0,
             "free_talk": 0,
-            "silence": 0
+            "silence":   0,
         }
-        score = 0
-        target_text = target_text.lower()
+        confidence = 0.0
+        target_low = target_text.lower()
 
-        # 1. Cleaning => Remove pause and segment the text
-        clean_text, segments, has_turn = self.cleaning(input_text)
+        # ── Build context-enriched input ──────────────────────────────
+        if context:
+            recent = context[-2:]
+            parts  = []
+            for turn in recent:
+                q = turn.get("question", "").strip()
+                a = turn.get("answer",   "").strip()
+                if a:
+                    parts.append(f"Previously asked: {q} Patient said: {a}")
+            prefix   = (" | ".join(parts) + " | Current: ") if parts else ""
+            enriched = prefix + input_text
+        else:
+            enriched = input_text
 
-        # print(segments)
-        # 2. Retrieval all segments
+        # ── Clean raw input (silence detection uses this) ─────────────
+        raw_clean, _, _ = self.cleaning(input_text)
+
+        # ── Clean enriched input for segment-level checks ─────────────
+        _, segments, has_turn = self.cleaning(enriched)
+
+        # ═══════════════════════════════════════════════════════════════
+        # SPECIAL STATE CHECK — always via FAISS
+        # ═══════════════════════════════════════════════════════════════
         for seg in segments:
             seg = seg.strip()
             if not seg:
                 continue
 
-            # 3. Special three types of semantic detection（embedding match）
-            is_dk, _ = self.faiss_match(seg, "dont_know", 0.85)
-            is_stop, _ = self.faiss_match(seg, "stop", 0.90)
-            is_emer, _ = self.faiss_match(seg, "emergency", 0.80)
+            is_dk,      _ = self.faiss_match(seg, "dont_know", 0.85)
+            is_stop,    _ = self.faiss_match(seg, "stop",      0.90)
+            is_emer,    _ = self.faiss_match(seg, "emergency", 0.75)
+            is_repeat,  _ = self.faiss_match(seg, "repeat",    0.80)
+            # require checked after repeat — "could you repeat" must not trigger require
+            is_require, _ = self.faiss_match(seg, "require",   0.82) if not is_repeat else (False, 0.0)
 
-            # If get special cases => Return
-            special_case_detected = False
-            if is_dk:
-                state["dont_know"] = 1
-                special_case_detected = True
-            if is_stop:
-                state["stop"] = 1
-                special_case_detected = True
-            if is_emer:
-                state["emergency"] = 1
-                special_case_detected = True
+            # Single-word segments must not trigger emergency, stop, or require —
+            # these states need meaningful context to be reliable.
+            # dont_know and repeat are still allowed on single words ("pardon", "stop").
+            seg_word_count = len(seg.split())
+            if seg_word_count < 2:
+                is_emer    = False
+                is_stop    = False
+                is_require = False
 
-            if special_case_detected:
-                return state, 2
+            if is_dk:      state["dont_know"] = 1
+            if is_stop:    state["stop"]      = 1
+            if is_emer:    state["emergency"] = 1
+            if is_repeat:  state["repeat"]    = 1
+            if is_require: state["require"]   = 1
 
-            special_case = is_dk or is_stop or is_emer
+            if any([is_dk, is_stop, is_emer, is_repeat, is_require]):
+                return state, 2, 0.0
 
-            # 4. simple match + Negative detection
-            simple_hit = (self.simplematch(seg, target_text) == 1)
-            neg = has_negation(seg)
+        # ═══════════════════════════════════════════════════════════════
+        # STAGE 1 — Exact string match (zero cost)
+        # ═══════════════════════════════════════════════════════════════
+        if self._stage1_string(raw_clean, target_low):
+            if not has_negation(raw_clean):
+                print("[ENSEMBLE] Stage 1 hit — exact match")
+                state["correct"] = 1
+                return state, 1, 1.0
+
+        # ═══════════════════════════════════════════════════════════════
+        # STAGE 2 — Normalised keyword match (zero cost)
+        # ═══════════════════════════════════════════════════════════════
+        if self._stage2_keyword(raw_clean, target_low):
+            if not has_negation(raw_clean):
+                print("[ENSEMBLE] Stage 2 hit — normalised keyword match")
+                state["correct"] = 1
+                return state, 1, 0.95
+
+        # ═══════════════════════════════════════════════════════════════
+        # STAGE 3 — BGE + FAISS semantic (full model)
+        # Only reached when stages 1 and 2 both fail
+        # ═══════════════════════════════════════════════════════════════
+        print("[ENSEMBLE] Stage 3 — semantic classification")
+
+        score = 0
+        for seg in segments:
+            seg = seg.strip()
+            if not seg:
+                continue
+
+            simple_hit = (self.simplematch(seg, target_low) == 1)
+            neg        = has_negation(seg)
 
             if simple_hit and not neg:
-                # print("Hit")
                 score += 1
+                confidence = 1.0
 
-            # 5. If there are transitional words and the current paragraph is not one of the three special cases → before invalidation, make a judgment
-            if has_turn and (not special_case):
+            if has_turn:
                 score = 0
-            # print(f"the seg is {seg}, the score is {score}")
 
-        # 6. Final detection
         if score == 0:
-            state["correct"] = 0  # incorrect
-            if not clean_text or len(clean_text.strip()) < 3:
-                # Check if there are any valid voice clips
-                valid_segments = [seg for seg in segments if seg and len(seg.strip()) >= 2]
-                if len(valid_segments) == 0:
+            state["correct"] = 0
+
+            # Silence — raw input only
+            if not raw_clean or len(raw_clean.strip()) < 3:
+                valid = [s for s in segments if s and len(s.strip()) >= 2]
+                if not valid:
                     state["silence"] = 1
 
-            is_free_talk = self.match(clean_text, target_text, 0.55)[0] == 0
-            if is_free_talk:
+            # Semantic similarity via BGE (uses context-enriched text)
+            _, sem_score = self.match(enriched, target_low, 0.55)
+            confidence   = max(0.0, float(sem_score))
+            if sem_score >= 0.55:
                 state["free_talk"] = 1
         else:
-            state["correct"] = 1  # correct
+            state["correct"] = 1
+
         if score >= 1:
             score = 1
 
-        return state, score
+        return state, score, round(confidence, 4)
+
+    def is_negative(self, text: str) -> bool:
+        negatives = [
+            r"\bno(?![a-zA-Z])",
+            r"not ready",
+            r"not yet",
+            r"i am not ready",
+            r"i'm not ready",
+            r"not now",
+            r"wait",
+            r"give me a minute"
+        ]
+
+        text_lower = text.lower().strip()
+
+        return any(re.search(pattern, text_lower) for pattern in negatives)
 
 
 if __name__ == "__main__":
