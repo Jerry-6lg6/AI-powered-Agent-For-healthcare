@@ -5,7 +5,22 @@ import numpy as np
 import threading
 import pyaudio
 from kokoro import KPipeline
+import os
+import sys
 
+
+def setup_espeak():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    espeak_path = os.path.join(base_dir, "espeak-ng", "espeak-ng-data")
+
+    if not os.path.exists(espeak_path):
+        raise RuntimeError("Missing espeak-ng-data!")
+
+    os.environ["ESPEAK_DATA_PATH"] = espeak_path
+
+
+# Download the Depandancy for runing KOKORO
+setup_espeak()
 
 def _wsola_time_stretch(x, speed, sr,
                         frame_ms=40,
