@@ -14,7 +14,10 @@ import os
 import queue
 from tools import SpectralSubtraction
 
+
 os.environ['TORCH_HOME'] = r'C:\torch_cache'
+os.makedirs(os.environ["TORCH_HOME"], exist_ok=True)
+
 CHUNK_DURATION = 0.5
 MAX_SILENCE_CHUNKS = 4
 LOGPROB_THRESHOLD = -1.0   # segments below this are likely hallucinated
