@@ -100,7 +100,7 @@ class VADProcessor:
 
 
 class speechRecognizer:
-    def __init__(self, model_name="whisper", model_size="medium", device="cuda",
+    def __init__(self, model_name="whisper", model_size="distil-large-v3", device="cuda",
                  denoise: bool = False):
         self.model_name = model_name
         self.denoise    = denoise
